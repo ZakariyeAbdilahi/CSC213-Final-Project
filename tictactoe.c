@@ -8,17 +8,24 @@
 #define PLAYER1 'X'
 #define PLAYER2 'O'
 #define EMPTY ' '
+#define MAX_GAMES 5
 
-#define NUM_GAMES 5 // The number of games to run concurrently
-
-// Declare board as a 3x3 array
-char board[3][3];
-
+char board[3][3]; // Declare board as a 3x3 array
 pthread_mutex_t board_mutex = PTHREAD_MUTEX_INITIALIZER; // Mutex to protect the board state
 
 // Player names
 char player1Name[50];
 char player2Name[50];
+
+// Shared structure to track wins
+typedef struct {
+    int player1Wins;
+    int player2Wins;
+    int ties;
+    pthread_mutex_t score_mutex;
+} GameScores;
+
+GameScores scores = {0, 0, 0, PTHREAD_MUTEX_INITIALIZER}; // Initialize the score structure
 
 // Function to reset the board
 void resetBoard() {
@@ -88,29 +95,42 @@ char checkWinner() {
     return EMPTY;
 }
 
-// Function to make a player's move
-void playerMove(char player) {
-    int x, y;
-    do {
+// Function to read a valid move from the player
+void readMove(int *x, int *y, char player) {
+    while (1) {
         if (player == PLAYER1) {
             printf("%s, enter your move (row 1-3 and column 1-3): ", player1Name);
         } else {
             printf("%s, enter your move (row 1-3 and column 1-3): ", player2Name);
         }
 
-        scanf("%d %d", &x, &y);
-        x--;  // Adjust to 0-based index
-        y--;  // Adjust to 0-based index
-
-        if (board[x][y] != EMPTY) {
-            printf("Invalid move! Try again.\n");
-        } else {
-            pthread_mutex_lock(&board_mutex);
-            board[x][y] = player;
-            pthread_mutex_unlock(&board_mutex);
-            break;
+        if (scanf("%d %d", x, y) != 2) { // Validate the input
+            while (getchar() != '\n'); // Clear invalid input from the buffer
+            printf("Invalid input. Please enter numbers for row and column.\n");
+            continue;
         }
-    } while (board[x][y] != EMPTY);
+
+        if (*x < 1 || *x > 3 || *y < 1 || *y > 3) {
+            printf("Invalid move! Row and column must be between 1 and 3.\n");
+        } else {
+            *x -= 1;  // Adjust to 0-based index
+            *y -= 1;  // Adjust to 0-based index
+            if (board[*x][*y] == EMPTY) {
+                break;
+            } else {
+                printf("Invalid move! That cell is already taken.\n");
+            }
+        }
+    }
+}
+
+// Function to make a player's move
+void playerMove(char player) {
+    int x, y;
+    readMove(&x, &y, player);
+    pthread_mutex_lock(&board_mutex);
+    board[x][y] = player;
+    pthread_mutex_unlock(&board_mutex);
 }
 
 // Function to record the result to a text file
@@ -137,12 +157,11 @@ void convertToTxt(char winner) {
     fclose(fp);
 }
 
-// Game logic function that runs in a separate thread
-void* runGame(void* arg) {
+// Function to play a single game
+void *playGame(void *arg) {
+    resetBoard(); // Reset the board at the beginning of the game
     char winner = EMPTY;
     int turn = 0; // 0 for player1, 1 for player2
-
-    resetBoard(); // Reset the board at the beginning of each game
 
     while (numFreeSpaces() > 0) {
         printBoard();
@@ -156,8 +175,18 @@ void* runGame(void* arg) {
         if (winner != EMPTY) {
             printBoard();
             printf("Winner: %c\n", winner);
+
+            pthread_mutex_lock(&scores.score_mutex);
+            if (winner == PLAYER1) {
+                scores.player1Wins++;
+            } else if (winner == PLAYER2) {
+                scores.player2Wins++;
+            } else {
+                scores.ties++;
+            }
+            pthread_mutex_unlock(&scores.score_mutex);
             convertToTxt(winner);
-            return NULL;  // Exit the game once we have a winner
+            return NULL;  // Exit the game thread once we have a winner
         }
 
         turn++;
@@ -165,14 +194,18 @@ void* runGame(void* arg) {
 
     printBoard();
     printf("It's a tie!\n");
-    convertToTxt('T'); // 'T' for tie
+
+    pthread_mutex_lock(&scores.score_mutex);
+    scores.ties++;
+    pthread_mutex_unlock(&scores.score_mutex);
+    convertToTxt('T');
     return NULL;
 }
 
 int main() {
     srand(time(NULL)); // Seed for random number generation
 
-    // Prompt for player names before running games
+    // Prompt for player names before starting the game
     printf("Enter player 1 name: ");
     fgets(player1Name, sizeof(player1Name), stdin);
     player1Name[strcspn(player1Name, "\n")] = '\0';  // Remove trailing newline
@@ -181,18 +214,23 @@ int main() {
     fgets(player2Name, sizeof(player2Name), stdin);
     player2Name[strcspn(player2Name, "\n")] = '\0';  // Remove trailing newline
 
-    pthread_t threads[NUM_GAMES]; // Array of threads for multiple games
+    pthread_t threads[MAX_GAMES]; // Array to store thread IDs
+    int gameCount = 0;
 
-    // Create threads to run multiple games concurrently
-    for (int i = 0; i < NUM_GAMES; i++) {
-        if (pthread_create(&threads[i], NULL, runGame, NULL) != 0) {
-            perror("Error creating thread");
-        }
+    // Play games until one player wins 3 times
+    while (scores.player1Wins < 3 && scores.player2Wins < 3 && gameCount < MAX_GAMES) {
+        pthread_create(&threads[gameCount], NULL, playGame, NULL);
+        pthread_join(threads[gameCount], NULL); // Wait for the game to finish
+        gameCount++;
+
+        printf("Current score: %s - %d, %s - %d\n", player1Name, scores.player1Wins, player2Name, scores.player2Wins);
     }
 
-    // Wait for all threads to finish
-    for (int i = 0; i < NUM_GAMES; i++) {
-        pthread_join(threads[i], NULL);
+    // Declare final winner
+    if (scores.player1Wins > scores.player2Wins) {
+        printf("%s wins the best-of-5!\n", player1Name);
+    } else {
+        printf("%s wins the best-of-5!\n", player2Name);
     }
 
     return 0;
