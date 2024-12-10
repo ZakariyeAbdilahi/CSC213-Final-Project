@@ -4,15 +4,11 @@
 #include <time.h>
 #include <pthread.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <fcntl.h>
 
 #define PLAYER1 'X'
 #define PLAYER2 'O'
 #define EMPTY ' '
-#define MAX_GAMES 7
-#define LOG_DIR "game_logs"
+#define MAX_GAMES 5
 
 char board[3][3]; // Declare board as a 3x3 array
 pthread_mutex_t board_mutex = PTHREAD_MUTEX_INITIALIZER; // Mutex to protect the board state
@@ -99,49 +95,111 @@ char checkWinner() {
     return EMPTY;
 }
 
-// Function to ensure the log directory exists
-void ensureLogDirectory() {
-    struct stat st;
-    if (stat(LOG_DIR, &st) == -1) {
-        if (mkdir(LOG_DIR, 0777) == -1) {
-            perror("Error creating log directory");
-            exit(EXIT_FAILURE);
+// Function to read a valid move from the player
+void readMove(int *x, int *y, char player) {
+    while (1) {
+        if (player == PLAYER1) {
+            printf("%s, enter your move (row 1-3 and column 1-3): ", player1Name);
+        } else {
+            printf("%s, enter your move (row 1-3 and column 1-3): ", player2Name);
+        }
+
+        if (scanf("%d %d", x, y) != 2) { // Validate the input
+            while (getchar() != '\n'); // Clear invalid input from the buffer
+            printf("Invalid input. Please enter numbers for row and column.\n");
+            continue;
+        }
+
+        if (*x < 1 || *x > 3 || *y < 1 || *y > 3) {
+            printf("Invalid move! Row and column must be between 1 and 3.\n");
+        } else {
+            *x -= 1;  // Adjust to 0-based index
+            *y -= 1;  // Adjust to 0-based index
+            if (board[*x][*y] == EMPTY) {
+                break;
+            } else {
+                printf("Invalid move! That cell is already taken.\n");
+            }
         }
     }
 }
 
+// Function to make a player's move
+void playerMove(char player) {
+    int x, y;
+    readMove(&x, &y, player);
+    pthread_mutex_lock(&board_mutex);
+    board[x][y] = player;
+    pthread_mutex_unlock(&board_mutex);
+}
+
 // Function to record the result to a text file
 void convertToTxt(char winner) {
-    ensureLogDirectory();
+    FILE *fp;
+    char record[] = "Game-Records.txt";
 
-    char filepath[100];
-    snprintf(filepath, sizeof(filepath), "%s/Game-Records.txt", LOG_DIR);
-
-    FILE *fp = fopen(filepath, "a"); // Open for appending
+    fp = fopen(record, "a"); // Open for appending
     if (fp == NULL) {
-        perror("Error opening file");
+        perror("Error opening file\n");
         return;
     }
 
-    time_t t = time(NULL);
-    struct tm *tm_info = localtime(&t);
-    char timestamp[50];
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
-
-    fprintf(fp, "[%s] Game between %s and %s\n", timestamp, player1Name, player2Name);
-    if (winner == 'T') {
-        fprintf(fp, "Result: It's a tie!\n");
-    } else {
-        fprintf(fp, "Winner: %c\n", winner);
-    }
-    fprintf(fp, "Final Board State:\n");
+    char loser = (winner == PLAYER1) ? PLAYER2 : PLAYER1;
+    fprintf(fp, "Game between %s and %s\n", player1Name, player2Name);
+    fprintf(fp, "Winner: %c\n", winner);
+    fprintf(fp, "Board State:\n");
     for (int i = 0; i < 3; i++) {
         fprintf(fp, " %c | %c | %c \n", board[i][0], board[i][1], board[i][2]);
-        if (i < 2) fprintf(fp, "---|---|---\n");
+        if (i < 2) fprintf(fp, "---|---\n");
     }
     fprintf(fp, "\n");
 
     fclose(fp);
+}
+
+// Function to play a single game
+void *playGame(void *arg) {
+    resetBoard(); // Reset the board at the beginning of the game
+    char winner = EMPTY;
+    int turn = 0; // 0 for player1, 1 for player2
+
+    while (numFreeSpaces() > 0) {
+        printBoard();
+        if (turn % 2 == 0) {
+            playerMove(PLAYER1);
+        } else {
+            playerMove(PLAYER2);
+        }
+
+        winner = checkWinner();
+        if (winner != EMPTY) {
+            printBoard();
+            printf("Winner: %c\n", winner);
+
+            pthread_mutex_lock(&scores.score_mutex);
+            if (winner == PLAYER1) {
+                scores.player1Wins++;
+            } else if (winner == PLAYER2) {
+                scores.player2Wins++;
+            } else {
+                scores.ties++;
+            }
+            pthread_mutex_unlock(&scores.score_mutex);
+            convertToTxt(winner);
+            return NULL;  // Exit the game thread once we have a winner
+        }
+
+        turn++;
+    }
+
+    printBoard();
+    printf("It's a tie!\n");
+
+    pthread_mutex_lock(&scores.score_mutex);
+    scores.ties++;
+    pthread_mutex_unlock(&scores.score_mutex);
+    convertToTxt('T');
+    return NULL;
 }
 
 int main() {
