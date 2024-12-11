@@ -3,12 +3,15 @@
 #include <string.h>
 #include <unistd.h>
 #include <ctype.h>
+
+
 #include "message.h"
 #include "socket.h"
 
-#define MAX_CLIENTS 2 // Limit for simplicity; adjust as needed for the game.
+#define NUM_CLIENTS 2 // Number of clients to connect sequentially
 
 int main() {
+    // Open a server socket
     unsigned short port = 0;
     int server_socket_fd = server_socket_open(&port);
     if (server_socket_fd == -1) {
@@ -17,62 +20,73 @@ int main() {
     }
 
     // Start listening for connections
-    if (listen(server_socket_fd, MAX_CLIENTS)) {
-        perror("Listen failed");
+    if (listen(server_socket_fd, NUM_CLIENTS)) { // Allow up to NUM_CLIENTS connections in the queue
+        perror("listen failed");
         exit(EXIT_FAILURE);
     }
 
     printf("Server listening on port %u\n", port);
 
-    // Accept multiple clients (up to MAX_CLIENTS)
-    int client_sockets[MAX_CLIENTS];
-    int connected_clients = 0;
+    int client_sockets[NUM_CLIENTS] = {0}; // Array to store client sockets
+    char *player_welcome_messages[NUM_CLIENTS] = {
+        "Welcome Player 1\nPlease wait for your turn.\n",
+        "Welcome Player 2\nPlease wait for your turn.\n"
+    };
 
-    while (connected_clients < MAX_CLIENTS) {
-        int client_socket_fd = server_socket_accept(server_socket_fd);
-        if (client_socket_fd == -1) {
-            perror("Accept failed");
+    // Accept connections for NUM_CLIENTS clients
+    for (int i = 0; i < NUM_CLIENTS; i++) {
+        client_sockets[i] = server_socket_accept(server_socket_fd);
+        if (client_sockets[i] == -1) {
+            perror("accept failed");
             exit(EXIT_FAILURE);
         }
+        printf("Client %d connected as Player %d!\n", i + 1, i + 1);
 
-        printf("Client %d connected!\n", connected_clients + 1);
-        client_sockets[connected_clients] = client_socket_fd;
-        connected_clients++;
-
-        // Send a welcome message
-        char welcome_message[50];
-        snprintf(welcome_message, sizeof(welcome_message), "Welcome Player %d!", connected_clients);
-        send_message(client_socket_fd, welcome_message);
-    }
-
-    printf("All players connected. Starting game...\n");
-
-    // Simple game loop to echo moves
-    char *message = NULL;
-    while (1) {
-        for (int i = 0; i < MAX_CLIENTS; i++) {
-            send_message(client_sockets[i], "Your move:");
-            message = receive_message(client_sockets[i]);
-            if (message == NULL) {
-                perror("Failed to read message from client");
-                exit(EXIT_FAILURE);
-            }
-
-            printf("Player %d sent: %s\n", i + 1, message);
-
-            // Echo the move to the other player
-            for (int j = 0; j < MAX_CLIENTS; j++) {
-                if (i != j) {
-                    send_message(client_sockets[j], message);
-                }
-            }
-
-            free(message);
+        // Send a welcome message to the client
+        if (send_message(client_sockets[i], player_welcome_messages[i]) == -1) {
+            perror("Failed to send welcome message");
+            exit(EXIT_FAILURE);
         }
     }
 
-    // Clean up
-    for (int i = 0; i < MAX_CLIENTS; i++) {
+    // Sequential communication loop
+    char *messages[NUM_CLIENTS] = {"Your Turn\n", "Wait for Your Turn\n"};
+    int active_player = 0; // Keep track of whose turn it is
+
+    while (1) {
+        // Notify all clients whose turn it is
+        for (int i = 0; i < NUM_CLIENTS; i++) {
+            if (send_message(client_sockets[i], messages[i == active_player ? 0 : 1]) == -1) {
+                perror("Failed to send turn message");
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        // Receive a message from the active player
+        char *message = receive_message(client_sockets[active_player]);
+        if (message == NULL) {
+            printf("Player %d disconnected.\n", active_player + 1);
+            break;
+        }
+        printf("Player %d: %s", active_player + 1, message);
+
+        // Echo the message back in uppercase to the active player
+        for (int j = 0; j < strlen(message); j++) {
+            message[j] = toupper(message[j]);
+        }
+        if (send_message(client_sockets[active_player], message) == -1) {
+            perror("Failed to send message to client");
+            free(message);
+            break;
+        }
+        free(message);
+
+        // Switch to the next player
+        active_player = (active_player + 1) % NUM_CLIENTS;
+    }
+
+    // Close all client connections
+    for (int i = 0; i < NUM_CLIENTS; i++) {
         close(client_sockets[i]);
     }
     close(server_socket_fd);
