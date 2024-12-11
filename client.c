@@ -5,7 +5,7 @@
 #include "message.h"
 #include "socket.h"
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (argc != 3) {
         fprintf(stderr, "Usage: %s <server name> <port>\n", argv[0]);
         exit(EXIT_FAILURE);
@@ -22,40 +22,43 @@ int main(int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
 
-    printf("Connected to server\n");
-
-    // Receive welcome message
+    // Receive welcome message from the server
     char *welcome_message = receive_message(socket_fd);
-    if (welcome_message != NULL) {
-        printf("%s\n", welcome_message);
+    if (welcome_message) {
+        printf("Server: %s", welcome_message);
         free(welcome_message);
     }
 
     char *line = NULL;
     size_t len = 0;
 
-    // Game loop: send moves and receive responses
+    // Communication loop
     while (1) {
-        // Wait for the server's prompt
+        // Wait for a message from the server
         char *server_message = receive_message(socket_fd);
         if (server_message == NULL) {
-            perror("Failed to read message from server");
+            printf("Disconnected from server.\n");
             break;
         }
+        printf("Server: %s", server_message);
 
-        printf("Server: %s\n", server_message);
+        // If it's the client's turn, allow them to send a message
+        if (strcmp(server_message, "Your Turn\n") == 0) {
+            printf("Enter a message (type 'quit' to exit): ");
+            getline(&line, &len, stdin);
+
+            if (strcmp(line, "quit\n") == 0) {
+                free(server_message);
+                break;
+            }
+
+            if (send_message(socket_fd, line) == -1) {
+                perror("Failed to send message to server");
+                free(server_message);
+                break;
+            }
+        }
         free(server_message);
-
-        // Input move
-        printf("Enter your move: ");
-        getline(&line, &len, stdin);
-
-        // Send the move to the server
-        int rc = send_message(socket_fd, line);
-        if (rc == -1) {
-            perror("Failed to send message to server");
-            break;
-        }
     }
 
     free(line);
