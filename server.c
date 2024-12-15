@@ -7,6 +7,7 @@
 
 #include "message.h"
 #include "socket.h"
+#include "tictactoe.h"
 
 #define NUM_CLIENTS 2 // Number of clients to connect sequentially
 
