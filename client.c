@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
 #include "message.h"
 #include "socket.h"
 
@@ -23,7 +22,7 @@ int main(int argc, char** argv) {
         exit(EXIT_FAILURE);
     }
 
-    // Receive welcome message from the server
+    // Receive and print the welcome message from the server
     char *welcome_message = receive_message(socket_fd);
     if (welcome_message) {
         printf("Server: %s", welcome_message);
@@ -35,31 +34,43 @@ int main(int argc, char** argv) {
 
     // Communication loop
     while (1) {
-        // Wait for a message from the server
+        // Receive and display the board
+        char *board = receive_message(socket_fd);
+        if (board == NULL) {
+            printf("Disconnected from server.\n");
+            break;
+        }
+        printf("Current Board:\n%s", board);
+        free(board);
+
+        // Wait for the player's turn
         char *server_message = receive_message(socket_fd);
         if (server_message == NULL) {
             printf("Disconnected from server.\n");
             break;
         }
         printf("Server: %s", server_message);
+        free(server_message);
 
-        // If it's the client's turn, allow them to send a message
         if (strcmp(server_message, "Your Turn\n") == 0) {
-            printf("Enter a message (type 'quit' to exit): ");
-            getline(&line, &len, stdin);
-
-            if (strcmp(line, "quit\n") == 0) {
-                free(server_message);
-                break;
+            // Player's turn to make a move
+            int x, y;
+            printf("Enter your move (x y): ");
+            while (1) {
+                getline(&line, &len, stdin);
+                if (sscanf(line, "%d %d", &x, &y) == 2 && x >= 0 && x < 3 && y >= 0 && y < 3) {
+                    break;
+                } else {
+                    printf("Invalid move. Please enter valid coordinates (x y): ");
+                }
             }
 
             if (send_message(socket_fd, line) == -1) {
-                perror("Failed to send message to server");
-                free(server_message);
+                perror("Failed to send move to server");
+                free(line);
                 break;
             }
         }
-        free(server_message);
     }
 
     free(line);
